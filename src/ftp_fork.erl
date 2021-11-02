@@ -48,7 +48,7 @@
          type/2, user/3, user/4, account/2,
          append/3, append/2, append_bin/3,
          append_chunk/2, append_chunk_end/1, append_chunk_start/2,
-         info/1, latest_ctrl_response/1]).
+         info/1, latest_ctrl_response/1, mlsd/1, mlsd/2, mlst/1, mlst/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2,
@@ -133,7 +133,7 @@
 %%%=========================================================================
 
 start() ->
-    application:start(ftp).
+    application:start(ftp_fork).
 
 %% This should be made an internal function when we remove the deprecation
 %% ftp client processes should always be part of ftp supervisor tree.
@@ -142,7 +142,7 @@ start() ->
 start_service(Options) ->
     try
         {ok, StartOptions} = start_options(Options),
-        case ftp_sup:start_child([[[{client, self()} | StartOptions], []]]) of
+        case ftp_sup_fork:start_child([[[{client, self()} | StartOptions], []]]) of
             {ok, Pid} ->
                 call(Pid, {open, ip_comm, Options}, plain);
             Error1 ->
@@ -154,7 +154,7 @@ start_service(Options) ->
     end.
 
 stop() ->
-    application:stop(ftp).
+    application:stop(ftp_fork).
 
 stop_service(Pid) ->
     close(Pid).
@@ -349,6 +349,39 @@ ls(Pid, Dir) ->
             {error, efnamena}
     end.
 
+-spec mlsd(Pid :: pid()) ->
+    {'ok', Listing :: string()} |
+        {'error', Reason :: restriction_reason() | common_reason()}.
+mlsd(Pid) ->
+  mlsd(Pid, "").
+
+-spec mlsd(Pid :: pid(), Dir :: string()) ->
+    {'ok', Listing :: string()} |
+        {'error', Reason ::  restriction_reason() | common_reason()}.
+mlsd(Pid, Dir) ->
+    case is_name_sane(Dir) of
+        true ->
+            call(Pid, {dir, mlsd, Dir}, string);
+        _ ->
+            {error, efnamena}
+    end.
+
+-spec mlst(Pid :: pid()) ->
+    {'ok', Listing :: string()} |
+        {'error', Reason :: restriction_reason() | common_reason()}.
+mlst(Pid) ->
+    mlst(Pid, "").
+
+-spec mlst(Pid :: pid(), Dir :: string()) ->
+    {'ok', Listing :: string()} |
+        {'error', Reason ::  restriction_reason() | common_reason()}.
+mlst(Pid, Dir) ->
+    case is_name_sane(Dir) of
+        true ->
+            call(Pid, {dir, mlst, Dir}, string);
+        _ ->
+            {error, efnamena}
+    end.
 
 %%--------------------------------------------------------------------------
 %% nlist(Pid) -> Result
@@ -1680,8 +1713,10 @@ handle_ctrl_result({pos_compl, Lines},
     % IP   = {A1, A2, A3, A4},
     Port = (P1 * 256) + P2,
 
-    ?DBG('<--data tcp connect to ~p:~p, Caller=~p~n',[IP,Port,Caller]),
     {ok, {OriginalIP, _}} = peername(CSock),
+    ?DBG('<--data tcp connect to ~p:~p, Caller=~p~n',[OriginalIP,Port,Caller]),
+    
+    erlang:display(OriginalIP),
     % erlang:display(connect_info(CSock)),
 
     case connect(OriginalIP, Port, SockOpts, Timeout, State) of
@@ -1996,7 +2031,9 @@ ctrl_result_response(_, #state{client = From} = State, ErrorMsg) ->
 handle_caller(#state{caller = {dir, Dir, Len}} = State0) ->
     Cmd = case Len of
               short -> "NLST";
-              long -> "MLSD"
+              long -> "LIST";
+              mlsd -> "MLSD";
+              mlst -> "MLST"
           end,
     _ = case Dir of
             "" ->
